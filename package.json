@@ -1,13 +1,18 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "outDir": "./dist",
-    "rootDir": "./",
-    "strict": false,
-    "esModuleInterop": true,
-    "skipLibCheck": true
+  "name": "bot-discord",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
   },
-  "include": ["**/*.ts"]
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
 }
+
