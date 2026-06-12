@@ -442,4 +442,9 @@ export const data = new SlashCommandBuilder()
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   const modal = new ModalBuilder().setCustomId("erlc_api_key_modal").setTitle("🔑 Configura API Key ERLC");
   const keyInput = new TextInputBuilder()
-   
+     // Codice di chiusura provvisorio per non far crashare Render
+  const row = new ActionRowBuilder<TextInputBuilder>().addComponents(keyInput);
+  modal.addComponents(row);
+  await interaction.showModal(modal);
+}
+
