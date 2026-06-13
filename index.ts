@@ -1,5 +1,5 @@
 // ============================================================
-// src/index.ts — Entry point Express + Bot
+// src/index.ts
 // ============================================================
 import app from "./app.js";
 import { logger } from "./lib/logger.js";
@@ -21,7 +21,7 @@ startBot().catch((err) => {
 
 
 // ============================================================
-// src/bot/index.ts — Bot principale, registrazione comandi e bottoni
+// src/bot/index.ts
 // ============================================================
 import { Client, Collection, Events, GatewayIntentBits, ChatInputCommandInteraction, REST, Routes } from "discord.js";
 import { logger } from "../lib/logger.js";
@@ -56,7 +56,6 @@ import * as configLog from "./commands/moderation/config-log.js";
 import * as banca from "./commands/banking/banca.js";
 import * as bancaAdmin from "./commands/banking/banca-admin.js";
 import * as scontrino from "./commands/scontrino.js";
-import { handleButton as handleScontrinoButton } from "./commands/scontrino.js";
 
 type Command = {
   data: { name: string; toJSON(): unknown };
@@ -101,7 +100,7 @@ export async function startBot() {
     if (interaction.isButton()) {
       if (interaction.customId.startsWith("scontrino_")) {
         try {
-          await handleScontrinoButton(interaction);
+          await scontrino.handleButton(interaction);
         } catch (err) {
           logger.error({ err }, "Errore gestione bottone scontrino");
           const errMsg = { content: "Si è verificato un errore durante l'elaborazione.", ephemeral: true };
@@ -131,7 +130,7 @@ export async function startBot() {
 
 
 // ============================================================
-// src/bot/utils/embeds.ts — Embed helpers riutilizzabili
+// src/bot/utils/embeds.ts
 // ============================================================
 import { EmbedBuilder, Colors } from "discord.js";
 
@@ -150,11 +149,12 @@ export function warnEmbed(title: string, description: string) {
 
 
 // ============================================================
-// src/bot/utils/key-store.ts — Persistenza API Key ERLC per guild
+// src/bot/utils/key-store.ts
 // ============================================================
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { logger } from "../../lib/logger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, "../../data");
@@ -182,269 +182,4 @@ export function setErlcKey(guildId: string, key: string): void {
 }
 export async function validateErlcKey(key: string): Promise<{ valid: boolean; serverName?: string }> {
   try {
-    const res = await fetch("https://api.policeroleplay.community/v1/server", { headers: { Authorization: key } });
-    if (!res.ok) return { valid: false };
-    const data = await res.json() as Record<string, unknown>;
-    return { valid: true, serverName: String(data["Name"] ?? "Server sconosciuto") };
-  } catch { return { valid: false }; }
-}
-
-
-// ============================================================
-// src/bot/utils/mod-log.ts — Log moderazione + client singleton
-// ============================================================
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-import { Client, EmbedBuilder, TextChannel, Colors } from "discord.js";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, "../../data");
-const STORE_PATH = join(DATA_DIR, "mod-log-channels.json");
-
-function loadStore(): Record<string, string> {
-  if (!existsSync(STORE_PATH)) return {};
-  try { return JSON.parse(readFileSync(STORE_PATH, "utf-8")) as Record<string, string>; }
-  catch { return {}; }
-}
-function saveStore(data: Record<string, string>) {
-  try {
-    if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-    writeFileSync(STORE_PATH, JSON.stringify(data, null, 2), "utf-8");
-  } catch { /* best-effort */ }
-}
-
-const store = loadStore();
-
-export function setLogChannel(guildId: string, channelId: string): void { store[guildId] = channelId; saveStore(store); }
-export function getLogChannel(guildId: string): string | undefined { return store[guildId]; }
-
-export type ModAction = "BAN" | "KICK" | "TIMEOUT" | "UNTIMEOUT" | "UNBAN" | "WARN" | "PURGE" | "SLOWMODE" | "LOCK" | "UNLOCK";
-
-const ACTION_META: Record<ModAction, { emoji: string; color: number; label: string }> = {
-  BAN:       { emoji: "🔨", color: Colors.Red,     label: "Ban" },
-  KICK:      { emoji: "👢", color: Colors.Orange,  label: "Kick" },
-  TIMEOUT:   { emoji: "🔇", color: Colors.Yellow,  label: "Timeout" },
-  UNTIMEOUT: { emoji: "🔊", color: Colors.Green,   label: "Timeout Rimosso" },
-  UNBAN:     { emoji: "✅", color: Colors.Green,   label: "Unban" },
-  WARN:      { emoji: "⚠️", color: Colors.Yellow,  label: "Warn" },
-  PURGE:     { emoji: "🗑️", color: Colors.Blurple, label: "Purge" },
-  SLOWMODE:  { emoji: "🐢", color: Colors.Blurple, label: "Slowmode" },
-  LOCK:      { emoji: "🔒", color: Colors.DarkRed, label: "Lock Canale" },
-  UNLOCK:    { emoji: "🔓", color: Colors.Green,   label: "Unlock Canale" },
-};
-
-export interface ModLogOptions {
-  client: Client; guildId: string; action: ModAction;
-  moderator: { id: string; tag: string };
-  target?: { id: string; tag: string };
-  reason?: string; extra?: Record<string, string>;
-}
-
-export async function sendModLog(opts: ModLogOptions): Promise<void> {
-  const channelId = getLogChannel(opts.guildId);
-  if (!channelId) return;
-  try {
-    const channel = await opts.client.channels.fetch(channelId);
-    if (!channel || !(channel instanceof TextChannel)) return;
-    const meta = ACTION_META[opts.action];
-    const embed = new EmbedBuilder()
-      .setColor(meta.color).setTitle(`${meta.emoji} ${meta.label}`)
-      .addFields({ name: "Moderatore", value: `<@${opts.moderator.id}> (${opts.moderator.tag})`, inline: true })
-      .setTimestamp().setFooter({ text: `Server ID: ${opts.guildId}` });
-    if (opts.target) embed.addFields({ name: "Utente", value: `<@${opts.target.id}> (${opts.target.tag})`, inline: true });
-    if (opts.reason) embed.addFields({ name: "Motivo", value: opts.reason, inline: false });
-    if (opts.extra) for (const [k, v] of Object.entries(opts.extra)) embed.addFields({ name: k, value: v, inline: true });
-    await channel.send({ embeds: [embed] });
-  } catch { /* canale non trovato o permessi insufficienti */ }
-}
-
-let _client: Client | null = null;
-export function setClient(client: Client): void { _client = client; }
-export function getClient(): Client | null { return _client; }
-
-
-// ============================================================
-// src/bot/utils/erlc-api.ts — Client API ERLC
-// ============================================================
-import { getErlcKey } from "./key-store.js";
-
-const BASE_URL = "https://api.policeroleplay.community/v1";
-
-async function erlcFetch(guildId: string, path: string, options: RequestInit = {}) {
-  const key = getErlcKey(guildId);
-  if (!key) throw new Error("Nessuna API Key configurata. Usa `/config-api-key` per impostarla.");
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers: { Authorization: key, "Content-Type": "application/json", ...(options.headers ?? {}) },
-  });
-  if (!res.ok) { const text = await res.text(); throw new Error(`ERLC API error ${res.status}: ${text}`); }
-  return res.json();
-}
-
-export async function getServerStatus(guildId: string) { return erlcFetch(guildId, "/server"); }
-export async function getPlayers(guildId: string) { return erlcFetch(guildId, "/server/players"); }
-export async function getJoinLogs(guildId: string) { return erlcFetch(guildId, "/server/joinlogs"); }
-export async function getKillLogs(guildId: string) { return erlcFetch(guildId, "/server/killlogs"); }
-export async function getCommandLogs(guildId: string) { return erlcFetch(guildId, "/server/commandlogs"); }
-export async function getModCallLogs(guildId: string) { return erlcFetch(guildId, "/server/modcalls"); }
-export async function getBans(guildId: string) { return erlcFetch(guildId, "/server/bans"); }
-export async function sendCommand(guildId: string, command: string) {
-  return erlcFetch(guildId, "/server/command", { method: "POST", body: JSON.stringify({ command }) });
-}
-
-
-// ============================================================
-// src/bot/utils/bank-store.ts — Persistenza conti bancari
-// ============================================================
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, "../../data");
-const STORE_PATH = join(DATA_DIR, "bank.json");
-
-export type TransactionType =
-  | "deposito" | "prelievo" | "bonifico_inviato" | "bonifico_ricevuto" | "impostazione_admin";
-
-export interface Transaction {
-  type: TransactionType;
-  amount: number;
-  balanceAfter: number;
-  timestamp: string;
-  note?: string;
-  counterpartId?: string;
-  counterpartTag?: string;
-}
-
-export interface BankAccount {
-  balance: number;
-  blocked: boolean;
-  transactions: Transaction[];
-}
-
-type GuildBank = Record<string, BankAccount>;
-type BankData = Record<string, GuildBank>;
-
-function loadData(): BankData {
-  if (!existsSync(STORE_PATH)) return {};
-  try { return JSON.parse(readFileSync(STORE_PATH, "utf-8")) as BankData; }
-  catch { return {}; }
-}
-function saveData(data: BankData): void {
-  try {
-    if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-    writeFileSync(STORE_PATH, JSON.stringify(data, null, 2), "utf-8");
-  } catch { /* best-effort */ }
-}
-
-const db = loadData();
-
-function getGuild(guildId: string): GuildBank {
-  if (!db[guildId]) db[guildId] = {};
-  return db[guildId]!;
-}
-
-export function getAccount(guildId: string, userId: string): BankAccount {
-  const guild = getGuild(guildId);
-  if (!guild[userId]) guild[userId] = { balance: 0, blocked: false, transactions: [] };
-  return guild[userId]!;
-}
-
-export function isBlocked(guildId: string, userId: string): boolean {
-  return getAccount(guildId, userId).blocked;
-}
-export function getBalance(guildId: string, userId: string): number {
-  return getAccount(guildId, userId).balance;
-}
-
-function addTransaction(account: BankAccount, tx: Omit<Transaction, "balanceAfter">) {
-  account.transactions.unshift({ ...tx, balanceAfter: account.balance });
-  if (account.transactions.length > 50) account.transactions = account.transactions.slice(0, 50);
-}
-
-export function deposit(guildId: string, userId: string, amount: number, note?: string): BankAccount {
-  const account = getAccount(guildId, userId);
-  account.balance += amount;
-  addTransaction(account, { type: "deposito", amount, timestamp: new Date().toISOString(), note });
-  saveData(db);
-  return account;
-}
-
-export function withdraw(guildId: string, userId: string, amount: number, note?: string): { ok: boolean; account?: BankAccount; error?: string } {
-  const account = getAccount(guildId, userId);
-  if (account.blocked) return { ok: false, error: "Il tuo conto è bloccato. Contatta un amministratore." };
-  if (account.balance < amount) return { ok: false, error: `Saldo insufficiente. Hai **€${account.balance.toLocaleString("it-IT")}** disponibili.` };
-  account.balance -= amount;
-  addTransaction(account, { type: "prelievo", amount, timestamp: new Date().toISOString(), note });
-  saveData(db);
-  return { ok: true, account };
-}
-
-export function transfer(
-  guildId: string,
-  fromId: string, fromTag: string,
-  toId: string, toTag: string,
-  amount: number, note?: string
-): { ok: boolean; error?: string } {
-  const from = getAccount(guildId, fromId);
-  const to = getAccount(guildId, toId);
-  if (from.blocked) return { ok: false, error: "Il tuo conto è bloccato. Contatta un amministratore." };
-  if (to.blocked) return { ok: false, error: "Il conto del destinatario è bloccato." };
-  if (from.balance < amount) return { ok: false, error: `Saldo insufficiente. Hai **€${from.balance.toLocaleString("it-IT")}** disponibili.` };
-  if (fromId === toId) return { ok: false, error: "Non puoi fare un bonifico a te stesso." };
-  const ts = new Date().toISOString();
-  from.balance -= amount;
-  addTransaction(from, { type: "bonifico_inviato", amount, timestamp: ts, note, counterpartId: toId, counterpartTag: toTag });
-  to.balance += amount;
-  addTransaction(to, { type: "bonifico_ricevuto", amount, timestamp: ts, note, counterpartId: fromId, counterpartTag: fromTag });
-  saveData(db);
-  return { ok: true };
-}
-
-export function adminSetBalance(guildId: string, userId: string, amount: number, adminTag: string): BankAccount {
-  const account = getAccount(guildId, userId);
-  const old = account.balance;
-  account.balance = amount;
-  addTransaction(account, { type: "impostazione_admin", amount: amount - old, timestamp: new Date().toISOString(), note: `Impostato da ${adminTag}` });
-  saveData(db);
-  return account;
-}
-
-export function adminBlock(guildId: string, userId: string, blocked: boolean): void {
-  const account = getAccount(guildId, userId);
-  account.blocked = blocked;
-  saveData(db);
-}
-
-export function getTransactions(guildId: string, userId: string, limit = 10): Transaction[] {
-  return getAccount(guildId, userId).transactions.slice(0, limit);
-}
-
-export function formatEur(n: number): string {
-  return `€${n.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-
-// ============================================================
-// src/bot/commands/erlc/config-api-key.ts
-// ============================================================
-import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits,
-  ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ModalSubmitInteraction } from "discord.js";
-import { setErlcKey, validateErlcKey } from "../../utils/key-store.js";
-import { successEmbed, errorEmbed, warnEmbed } from "../../utils/embeds.js";
-
-export const data = new SlashCommandBuilder()
-  .setName("config-api-key").setDescription("Configura la API Key del server ERLC")
-  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
-
-export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
-  const modal = new ModalBuilder().setCustomId("erlc_api_key_modal").setTitle("🔑 Configura API Key ERLC");
-  const keyInput = new TextInputBuilder()
-     // Codice di chiusura provvisorio per non far crashare Render
-  const row = new ActionRowBuilder<TextInputBuilder>().addComponents(keyInput);
-  modal.addComponents(row);
-  await interaction.showModal(modal);
-}
-
+    const res = await fetch("https://api.policeroleplay.community
